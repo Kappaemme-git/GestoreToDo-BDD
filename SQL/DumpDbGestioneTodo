@@ -1,0 +1,778 @@
+--
+-- PostgreSQL database dump
+--
+
+\restrict 9rrjUfMYHkxELyi9VqL0qKC66WevEzbOy67QoXurmlEgdTppk9N84WvqAU06XFf
+
+-- Dumped from database version 18.3
+-- Dumped by pg_dump version 18.3
+
+-- Started on 2026-03-16 19:11:05 CET
+
+SET statement_timeout = 0;
+SET lock_timeout = 0;
+SET idle_in_transaction_session_timeout = 0;
+SET transaction_timeout = 0;
+SET client_encoding = 'UTF8';
+SET standard_conforming_strings = on;
+SELECT pg_catalog.set_config('search_path', '', false);
+SET check_function_bodies = false;
+SET xmloption = content;
+SET client_min_messages = warning;
+SET row_security = off;
+
+--
+-- TOC entry 884 (class 1247 OID 16713)
+-- Name: status_todo; Type: TYPE; Schema: public; Owner: postgres
+--
+
+CREATE TYPE public.status_todo AS ENUM (
+    'COMPLETATO',
+    'NON_COMPLETATO'
+);
+
+
+ALTER TYPE public.status_todo OWNER TO postgres;
+
+--
+-- TOC entry 878 (class 1247 OID 16687)
+-- Name: tipo_bacheca; Type: TYPE; Schema: public; Owner: postgres
+--
+
+CREATE TYPE public.tipo_bacheca AS ENUM (
+    'UNIVERSITA',
+    'LAVORO',
+    'TEMPO_LIBERO'
+);
+
+
+ALTER TYPE public.tipo_bacheca OWNER TO postgres;
+
+--
+-- TOC entry 252 (class 1255 OID 16785)
+-- Name: aggiorna_bacheca(integer, character varying); Type: PROCEDURE; Schema: public; Owner: postgres
+--
+
+CREATE PROCEDURE public.aggiorna_bacheca(IN p_bacheca_id integer, IN p_descrizione character varying)
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+  UPDATE bacheca
+  SET descrizione = COALESCE(p_descrizione, '')
+  WHERE id = p_bacheca_id;
+END;
+$$;
+
+
+ALTER PROCEDURE public.aggiorna_bacheca(IN p_bacheca_id integer, IN p_descrizione character varying) OWNER TO postgres;
+
+--
+-- TOC entry 230 (class 1255 OID 16765)
+-- Name: aggiorna_todo(integer, character varying, character varying, date, character varying, character varying, character varying, public.status_todo); Type: PROCEDURE; Schema: public; Owner: postgres
+--
+
+CREATE PROCEDURE public.aggiorna_todo(IN p_todo_id integer, IN p_titolo character varying, IN p_descrizione character varying, IN p_data_scadenza date, IN p_url character varying, IN p_immagine character varying, IN p_colore character varying, IN p_stato public.status_todo)
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+  UPDATE todo
+  SET titolo = p_titolo,
+      descrizione = p_descrizione,
+      data_scadenza = p_data_scadenza,
+      url = p_url,
+      immagine = p_immagine,
+      colore = p_colore,
+      stato = p_stato
+  WHERE id = p_todo_id;
+END;
+$$;
+
+
+ALTER PROCEDURE public.aggiorna_todo(IN p_todo_id integer, IN p_titolo character varying, IN p_descrizione character varying, IN p_data_scadenza date, IN p_url character varying, IN p_immagine character varying, IN p_colore character varying, IN p_stato public.status_todo) OWNER TO postgres;
+
+--
+-- TOC entry 236 (class 1255 OID 16771)
+-- Name: cerca_todo_per_titolo(character varying, text); Type: FUNCTION; Schema: public; Owner: postgres
+--
+
+CREATE FUNCTION public.cerca_todo_per_titolo(p_username character varying, p_query text) RETURNS TABLE(todo_id integer, titolo character varying, data_scadenza date, tipo_bacheca public.tipo_bacheca, ordine integer, stato public.status_todo)
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+  RETURN QUERY
+  SELECT t.id, t.titolo, t.data_scadenza, b.tipo, t.ordine, t.stato
+  FROM todo t
+  JOIN bacheca b ON b.id = t.bacheca_id
+  LEFT JOIN condivisione c ON c.todo_id = t.id
+  WHERE (b.proprietario = p_username OR c.username = p_username)
+    AND t.titolo IS NOT NULL
+    AND t.titolo ILIKE '%' || p_query || '%'
+  ORDER BY b.tipo, t.ordine;
+END;
+$$;
+
+
+ALTER FUNCTION public.cerca_todo_per_titolo(p_username character varying, p_query text) OWNER TO postgres;
+
+--
+-- TOC entry 243 (class 1255 OID 16778)
+-- Name: check_no_self_share(); Type: FUNCTION; Schema: public; Owner: postgres
+--
+
+CREATE FUNCTION public.check_no_self_share() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+  owner VARCHAR(20);
+BEGIN
+  SELECT b.proprietario
+  INTO owner
+  FROM todo t
+  JOIN bacheca b ON t.bacheca_id = b.id
+  WHERE t.id = NEW.todo_id;
+
+  IF owner IS NULL THEN
+    RAISE EXCEPTION 'Todo % non trovato', NEW.todo_id;
+  END IF;
+
+  IF NEW.username = owner THEN
+    RAISE EXCEPTION 'Non puoi condividere un ToDo con te stesso (%).', owner;
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+
+ALTER FUNCTION public.check_no_self_share() OWNER TO postgres;
+
+--
+-- TOC entry 242 (class 1255 OID 16773)
+-- Name: check_scadenza_insert(); Type: FUNCTION; Schema: public; Owner: postgres
+--
+
+CREATE FUNCTION public.check_scadenza_insert() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+  IF NEW.data_scadenza IS NOT NULL AND NEW.data_scadenza < CURRENT_DATE THEN
+    RAISE EXCEPTION 'data_scadenza non puo essere nel passato';
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+
+ALTER FUNCTION public.check_scadenza_insert() OWNER TO postgres;
+
+--
+-- TOC entry 232 (class 1255 OID 16767)
+-- Name: condividi_todo(integer, character varying, date); Type: PROCEDURE; Schema: public; Owner: postgres
+--
+
+CREATE PROCEDURE public.condividi_todo(IN p_todo_id integer, IN p_username character varying, IN p_datacondivisione date)
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+  INSERT INTO condivisione(todo_id, username, dataCondivisione)
+  VALUES (p_todo_id, p_username, p_dataCondivisione);
+END;
+$$;
+
+
+ALTER PROCEDURE public.condividi_todo(IN p_todo_id integer, IN p_username character varying, IN p_datacondivisione date) OWNER TO postgres;
+
+--
+-- TOC entry 251 (class 1255 OID 16784)
+-- Name: crea_bacheca(character varying, public.tipo_bacheca, character varying); Type: PROCEDURE; Schema: public; Owner: postgres
+--
+
+CREATE PROCEDURE public.crea_bacheca(IN p_proprietario character varying, IN p_tipo public.tipo_bacheca, IN p_descrizione character varying)
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+  INSERT INTO bacheca(proprietario, tipo, descrizione)
+  VALUES (p_proprietario, p_tipo, COALESCE(p_descrizione, ''));
+END;
+$$;
+
+
+ALTER PROCEDURE public.crea_bacheca(IN p_proprietario character varying, IN p_tipo public.tipo_bacheca, IN p_descrizione character varying) OWNER TO postgres;
+
+--
+-- TOC entry 225 (class 1255 OID 16753)
+-- Name: crea_bacheche(); Type: FUNCTION; Schema: public; Owner: postgres
+--
+
+CREATE FUNCTION public.crea_bacheche() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+  INSERT INTO bacheca (proprietario, tipo, descrizione)
+  VALUES
+    (NEW.username, 'UNIVERSITA', 'Universita'),
+    (NEW.username, 'LAVORO', 'Lavoro'),
+    (NEW.username, 'TEMPO_LIBERO', 'Tempo Libero');
+  RETURN NEW;
+END;
+$$;
+
+
+ALTER FUNCTION public.crea_bacheche() OWNER TO postgres;
+
+--
+-- TOC entry 229 (class 1255 OID 16764)
+-- Name: crea_todo(integer, character varying, character varying, date, character varying, character varying, character varying); Type: PROCEDURE; Schema: public; Owner: postgres
+--
+
+CREATE PROCEDURE public.crea_todo(IN p_bacheca_id integer, IN p_titolo character varying, IN p_descrizione character varying, IN p_data_scadenza date, IN p_url character varying, IN p_immagine character varying, IN p_colore character varying)
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+  new_ordine INTEGER;
+BEGIN
+  SELECT COALESCE(MAX(ordine), 0) + 1
+  INTO new_ordine
+  FROM todo
+  WHERE bacheca_id = p_bacheca_id;
+
+  INSERT INTO todo (bacheca_id, ordine, titolo, descrizione, data_scadenza, url, immagine, colore)
+  VALUES (p_bacheca_id, new_ordine, p_titolo, p_descrizione, p_data_scadenza, p_url, p_immagine, p_colore);
+END;
+$$;
+
+
+ALTER PROCEDURE public.crea_todo(IN p_bacheca_id integer, IN p_titolo character varying, IN p_descrizione character varying, IN p_data_scadenza date, IN p_url character varying, IN p_immagine character varying, IN p_colore character varying) OWNER TO postgres;
+
+--
+-- TOC entry 233 (class 1255 OID 16768)
+-- Name: crea_utente(character varying, character varying); Type: PROCEDURE; Schema: public; Owner: postgres
+--
+
+CREATE PROCEDURE public.crea_utente(IN p_username character varying, IN p_password character varying)
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+  INSERT INTO utente(username, password)
+  VALUES (p_username, p_password);
+END;
+$$;
+
+
+ALTER PROCEDURE public.crea_utente(IN p_username character varying, IN p_password character varying) OWNER TO postgres;
+
+--
+-- TOC entry 253 (class 1255 OID 16786)
+-- Name: elimina_bacheca(integer); Type: PROCEDURE; Schema: public; Owner: postgres
+--
+
+CREATE PROCEDURE public.elimina_bacheca(IN p_bacheca_id integer)
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+  DELETE FROM bacheca
+  WHERE id = p_bacheca_id;
+END;
+$$;
+
+
+ALTER PROCEDURE public.elimina_bacheca(IN p_bacheca_id integer) OWNER TO postgres;
+
+--
+-- TOC entry 231 (class 1255 OID 16766)
+-- Name: elimina_todo(integer); Type: PROCEDURE; Schema: public; Owner: postgres
+--
+
+CREATE PROCEDURE public.elimina_todo(IN p_todo_id integer)
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+  DELETE FROM todo WHERE id = p_todo_id;
+END;
+$$;
+
+
+ALTER PROCEDURE public.elimina_todo(IN p_todo_id integer) OWNER TO postgres;
+
+--
+-- TOC entry 234 (class 1255 OID 16769)
+-- Name: elimina_utente(character varying); Type: PROCEDURE; Schema: public; Owner: postgres
+--
+
+CREATE PROCEDURE public.elimina_utente(IN p_username character varying)
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+  DELETE FROM utente WHERE username = p_username;
+END;
+$$;
+
+
+ALTER PROCEDURE public.elimina_utente(IN p_username character varying) OWNER TO postgres;
+
+--
+-- TOC entry 226 (class 1255 OID 16761)
+-- Name: get_todo_completati(character varying); Type: FUNCTION; Schema: public; Owner: postgres
+--
+
+CREATE FUNCTION public.get_todo_completati(p_username character varying) RETURNS TABLE(todo_id integer, titolo character varying, data_scadenza date, tipo_bacheca public.tipo_bacheca, ordine integer)
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+  RETURN QUERY
+  SELECT t.id, t.titolo, t.data_scadenza, b.tipo, t.ordine
+  FROM todo t
+  JOIN bacheca b ON b.id = t.bacheca_id
+  LEFT JOIN condivisione c ON c.todo_id = t.id
+  WHERE t.stato = 'COMPLETATO'
+    AND (b.proprietario = p_username OR c.username = p_username)
+  ORDER BY b.tipo, t.ordine;
+END;
+$$;
+
+
+ALTER FUNCTION public.get_todo_completati(p_username character varying) OWNER TO postgres;
+
+--
+-- TOC entry 228 (class 1255 OID 16760)
+-- Name: get_todo_scaduti(character varying); Type: FUNCTION; Schema: public; Owner: postgres
+--
+
+CREATE FUNCTION public.get_todo_scaduti(p_username character varying) RETURNS TABLE(todo_id integer, titolo character varying, data_scadenza date, tipo_bacheca public.tipo_bacheca, ordine integer, stato public.status_todo)
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+  RETURN QUERY
+  SELECT t.id, t.titolo, t.data_scadenza, b.tipo, t.ordine, t.stato
+  FROM todo t
+  JOIN bacheca b ON b.id = t.bacheca_id
+  LEFT JOIN condivisione c ON c.todo_id = t.id
+  WHERE t.data_scadenza IS NOT NULL
+    AND t.data_scadenza < CURRENT_DATE
+    AND (b.proprietario = p_username OR c.username = p_username)
+  ORDER BY t.data_scadenza, b.tipo, t.ordine;
+END;
+$$;
+
+
+ALTER FUNCTION public.get_todo_scaduti(p_username character varying) OWNER TO postgres;
+
+--
+-- TOC entry 235 (class 1255 OID 16770)
+-- Name: rimuovi_condivisione(integer, character varying); Type: PROCEDURE; Schema: public; Owner: postgres
+--
+
+CREATE PROCEDURE public.rimuovi_condivisione(IN p_todo_id integer, IN p_username character varying)
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+  DELETE FROM condivisione
+  WHERE todo_id = p_todo_id
+    AND username = p_username;
+END;
+$$;
+
+
+ALTER PROCEDURE public.rimuovi_condivisione(IN p_todo_id integer, IN p_username character varying) OWNER TO postgres;
+
+--
+-- TOC entry 237 (class 1255 OID 16772)
+-- Name: sposta_todo_bacheca(integer, integer); Type: PROCEDURE; Schema: public; Owner: postgres
+--
+
+CREATE PROCEDURE public.sposta_todo_bacheca(IN p_todo_id integer, IN p_nuova_bacheca_id integer)
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+  new_ordine INTEGER;
+BEGIN
+  SELECT COALESCE(MAX(ordine), 0) + 1
+  INTO new_ordine
+  FROM todo
+  WHERE bacheca_id = p_nuova_bacheca_id;
+
+  UPDATE todo
+  SET bacheca_id = p_nuova_bacheca_id,
+      ordine = new_ordine
+  WHERE id = p_todo_id;
+END;
+$$;
+
+
+ALTER PROCEDURE public.sposta_todo_bacheca(IN p_todo_id integer, IN p_nuova_bacheca_id integer) OWNER TO postgres;
+
+--
+-- TOC entry 227 (class 1255 OID 16762)
+-- Name: trova_todo_per_scadenza(character varying, date); Type: FUNCTION; Schema: public; Owner: postgres
+--
+
+CREATE FUNCTION public.trova_todo_per_scadenza(p_username character varying, p_data_limite date) RETURNS TABLE(todo_id integer, titolo character varying, data_scadenza date, tipo_bacheca public.tipo_bacheca, ordine integer, stato public.status_todo)
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+  RETURN QUERY
+  SELECT t.id, t.titolo, t.data_scadenza, b.tipo, t.ordine, t.stato
+  FROM todo t
+  JOIN bacheca b ON b.id = t.bacheca_id
+  LEFT JOIN condivisione c ON c.todo_id = t.id
+  WHERE t.data_scadenza IS NOT NULL
+    AND t.data_scadenza <= p_data_limite
+    AND (b.proprietario = p_username OR c.username = p_username)
+  ORDER BY t.data_scadenza, b.tipo, t.ordine;
+END;
+$$;
+
+
+ALTER FUNCTION public.trova_todo_per_scadenza(p_username character varying, p_data_limite date) OWNER TO postgres;
+
+SET default_tablespace = '';
+
+SET default_table_access_method = heap;
+
+--
+-- TOC entry 221 (class 1259 OID 16694)
+-- Name: bacheca; Type: TABLE; Schema: public; Owner: postgres
+--
+
+CREATE TABLE public.bacheca (
+    id integer NOT NULL,
+    proprietario character varying(20) NOT NULL,
+    tipo public.tipo_bacheca NOT NULL,
+    descrizione character varying(50) DEFAULT ''::character varying NOT NULL
+);
+
+
+ALTER TABLE public.bacheca OWNER TO postgres;
+
+--
+-- TOC entry 220 (class 1259 OID 16693)
+-- Name: bacheca_id_seq; Type: SEQUENCE; Schema: public; Owner: postgres
+--
+
+CREATE SEQUENCE public.bacheca_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+ALTER SEQUENCE public.bacheca_id_seq OWNER TO postgres;
+
+--
+-- TOC entry 3890 (class 0 OID 0)
+-- Dependencies: 220
+-- Name: bacheca_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: postgres
+--
+
+ALTER SEQUENCE public.bacheca_id_seq OWNED BY public.bacheca.id;
+
+
+--
+-- TOC entry 224 (class 1259 OID 16736)
+-- Name: condivisione; Type: TABLE; Schema: public; Owner: postgres
+--
+
+CREATE TABLE public.condivisione (
+    todo_id integer NOT NULL,
+    username character varying(20) NOT NULL,
+    datacondivisione date
+);
+
+
+ALTER TABLE public.condivisione OWNER TO postgres;
+
+--
+-- TOC entry 223 (class 1259 OID 16718)
+-- Name: todo; Type: TABLE; Schema: public; Owner: postgres
+--
+
+CREATE TABLE public.todo (
+    id integer NOT NULL,
+    bacheca_id integer NOT NULL,
+    data_scadenza date,
+    ordine integer NOT NULL,
+    stato public.status_todo DEFAULT 'NON_COMPLETATO'::public.status_todo NOT NULL,
+    titolo character varying(100),
+    descrizione character varying(255),
+    url character varying(255),
+    immagine character varying(255),
+    colore character varying(6),
+    CONSTRAINT check_lunghezza_descrizione_todo CHECK (((descrizione IS NULL) OR (length((descrizione)::text) <= 255))),
+    CONSTRAINT check_lunghezza_titolo_todo CHECK (((titolo IS NULL) OR (length((titolo)::text) <= 100)))
+);
+
+
+ALTER TABLE public.todo OWNER TO postgres;
+
+--
+-- TOC entry 222 (class 1259 OID 16717)
+-- Name: todo_id_seq; Type: SEQUENCE; Schema: public; Owner: postgres
+--
+
+CREATE SEQUENCE public.todo_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+ALTER SEQUENCE public.todo_id_seq OWNER TO postgres;
+
+--
+-- TOC entry 3891 (class 0 OID 0)
+-- Dependencies: 222
+-- Name: todo_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: postgres
+--
+
+ALTER SEQUENCE public.todo_id_seq OWNED BY public.todo.id;
+
+
+--
+-- TOC entry 219 (class 1259 OID 16679)
+-- Name: utente; Type: TABLE; Schema: public; Owner: postgres
+--
+
+CREATE TABLE public.utente (
+    username character varying(20) NOT NULL,
+    password character varying(255) NOT NULL
+);
+
+
+ALTER TABLE public.utente OWNER TO postgres;
+
+--
+-- TOC entry 3707 (class 2604 OID 16697)
+-- Name: bacheca id; Type: DEFAULT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.bacheca ALTER COLUMN id SET DEFAULT nextval('public.bacheca_id_seq'::regclass);
+
+
+--
+-- TOC entry 3709 (class 2604 OID 16721)
+-- Name: todo id; Type: DEFAULT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.todo ALTER COLUMN id SET DEFAULT nextval('public.todo_id_seq'::regclass);
+
+
+--
+-- TOC entry 3881 (class 0 OID 16694)
+-- Dependencies: 221
+-- Data for Name: bacheca; Type: TABLE DATA; Schema: public; Owner: postgres
+--
+
+COPY public.bacheca (id, proprietario, tipo, descrizione) FROM stdin;
+1	simone	UNIVERSITA	Universita
+2	simone	LAVORO	Lavoro
+3	simone	TEMPO_LIBERO	Tempo Libero
+4	francesco	UNIVERSITA	Universita
+5	francesco	LAVORO	Lavoro
+6	francesco	TEMPO_LIBERO	Tempo Libero
+7	pluto	UNIVERSITA	Universita
+8	pluto	LAVORO	Lavoro
+9	pluto	TEMPO_LIBERO	Tempo Libero
+10	paperino	UNIVERSITA	Universita
+11	paperino	LAVORO	Lavoro
+12	paperino	TEMPO_LIBERO	Tempo Libero
+\.
+
+
+--
+-- TOC entry 3884 (class 0 OID 16736)
+-- Dependencies: 224
+-- Data for Name: condivisione; Type: TABLE DATA; Schema: public; Owner: postgres
+--
+
+COPY public.condivisione (todo_id, username, datacondivisione) FROM stdin;
+1	francesco	2026-03-12
+1	pluto	2026-03-12
+7	simone	2026-03-12
+6	paperino	2026-03-12
+12	simone	2026-03-12
+12	francesco	2026-03-12
+\.
+
+
+--
+-- TOC entry 3883 (class 0 OID 16718)
+-- Dependencies: 223
+-- Data for Name: todo; Type: TABLE DATA; Schema: public; Owner: postgres
+--
+
+COPY public.todo (id, bacheca_id, data_scadenza, ordine, stato, titolo, descrizione, url, immagine, colore) FROM stdin;
+1	1	2026-03-15	1	NON_COMPLETATO	Compito BD	Preparare presentazione	\N	\N	FFAABB
+2	1	2026-03-17	2	NON_COMPLETATO	Ripasso SQL	JOIN e GROUP BY	\N	\N	\N
+3	2	2026-03-22	1	NON_COMPLETATO	CV	Aggiornare CV	\N	\N	\N
+4	3	2026-03-13	1	NON_COMPLETATO	Palestra	Allenamento serale	\N	\N	\N
+5	4	2026-03-16	1	NON_COMPLETATO	Esercizi	Normalizzazione	\N	\N	\N
+6	5	2026-03-19	1	NON_COMPLETATO	Task GUI	Fix bug interfaccia	\N	\N	\N
+7	6	2026-03-13	1	NON_COMPLETATO	Spesa	Comprare roba per cena	\N	\N	\N
+8	7	2026-03-18	1	NON_COMPLETATO	Reti	Ripasso TCP/UDP	\N	\N	\N
+9	8	2026-03-14	1	NON_COMPLETATO	Turno	Preparare attività	\N	\N	\N
+10	9	2026-03-20	1	NON_COMPLETATO	Highlights Inter-PSG	Riguardare highlights inter psg 0-5	\N	\N	\N
+11	10	2026-03-17	1	NON_COMPLETATO	Appunti	Sistemare appunti lezioni	\N	\N	\N
+12	11	2026-03-14	1	NON_COMPLETATO	Email	Rispondere ai messaggi	\N	\N	\N
+13	12	2026-03-16	1	NON_COMPLETATO	Calcetto	Partita con amici	\N	\N	\N
+\.
+
+
+--
+-- TOC entry 3879 (class 0 OID 16679)
+-- Dependencies: 219
+-- Data for Name: utente; Type: TABLE DATA; Schema: public; Owner: postgres
+--
+
+COPY public.utente (username, password) FROM stdin;
+simone	pass_simone
+francesco	pass_francesco
+pluto	pass_pluto
+paperino	pass_paperino
+\.
+
+
+--
+-- TOC entry 3892 (class 0 OID 0)
+-- Dependencies: 220
+-- Name: bacheca_id_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
+--
+
+SELECT pg_catalog.setval('public.bacheca_id_seq', 12, true);
+
+
+--
+-- TOC entry 3893 (class 0 OID 0)
+-- Dependencies: 222
+-- Name: todo_id_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
+--
+
+SELECT pg_catalog.setval('public.todo_id_seq', 13, true);
+
+
+--
+-- TOC entry 3716 (class 2606 OID 16704)
+-- Name: bacheca bacheca_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.bacheca
+    ADD CONSTRAINT bacheca_pkey PRIMARY KEY (id);
+
+
+--
+-- TOC entry 3718 (class 2606 OID 16706)
+-- Name: bacheca bacheca_proprietario_tipo_key; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.bacheca
+    ADD CONSTRAINT bacheca_proprietario_tipo_key UNIQUE (proprietario, tipo);
+
+
+--
+-- TOC entry 3724 (class 2606 OID 16742)
+-- Name: condivisione condivisione_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.condivisione
+    ADD CONSTRAINT condivisione_pkey PRIMARY KEY (todo_id, username);
+
+
+--
+-- TOC entry 3720 (class 2606 OID 16730)
+-- Name: todo todo_bacheca_id_ordine_key; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.todo
+    ADD CONSTRAINT todo_bacheca_id_ordine_key UNIQUE (bacheca_id, ordine);
+
+
+--
+-- TOC entry 3722 (class 2606 OID 16728)
+-- Name: todo todo_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.todo
+    ADD CONSTRAINT todo_pkey PRIMARY KEY (id);
+
+
+--
+-- TOC entry 3714 (class 2606 OID 16685)
+-- Name: utente utente_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.utente
+    ADD CONSTRAINT utente_pkey PRIMARY KEY (username);
+
+
+--
+-- TOC entry 3730 (class 2620 OID 16775)
+-- Name: todo trg_check_scadenza_insert; Type: TRIGGER; Schema: public; Owner: postgres
+--
+
+CREATE TRIGGER trg_check_scadenza_insert BEFORE INSERT ON public.todo FOR EACH ROW EXECUTE FUNCTION public.check_scadenza_insert();
+
+
+--
+-- TOC entry 3729 (class 2620 OID 16754)
+-- Name: utente trg_crea_bacheche; Type: TRIGGER; Schema: public; Owner: postgres
+--
+
+CREATE TRIGGER trg_crea_bacheche AFTER INSERT ON public.utente FOR EACH ROW EXECUTE FUNCTION public.crea_bacheche();
+
+
+--
+-- TOC entry 3731 (class 2620 OID 16779)
+-- Name: condivisione trg_no_self_share; Type: TRIGGER; Schema: public; Owner: postgres
+--
+
+CREATE TRIGGER trg_no_self_share BEFORE INSERT ON public.condivisione FOR EACH ROW EXECUTE FUNCTION public.check_no_self_share();
+
+
+--
+-- TOC entry 3725 (class 2606 OID 16707)
+-- Name: bacheca bacheca_proprietario_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.bacheca
+    ADD CONSTRAINT bacheca_proprietario_fkey FOREIGN KEY (proprietario) REFERENCES public.utente(username) ON DELETE CASCADE;
+
+
+--
+-- TOC entry 3727 (class 2606 OID 16743)
+-- Name: condivisione condivisione_todo_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.condivisione
+    ADD CONSTRAINT condivisione_todo_id_fkey FOREIGN KEY (todo_id) REFERENCES public.todo(id) ON DELETE CASCADE;
+
+
+--
+-- TOC entry 3728 (class 2606 OID 16748)
+-- Name: condivisione condivisione_username_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.condivisione
+    ADD CONSTRAINT condivisione_username_fkey FOREIGN KEY (username) REFERENCES public.utente(username) ON DELETE CASCADE;
+
+
+--
+-- TOC entry 3726 (class 2606 OID 16731)
+-- Name: todo todo_bacheca_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.todo
+    ADD CONSTRAINT todo_bacheca_id_fkey FOREIGN KEY (bacheca_id) REFERENCES public.bacheca(id) ON DELETE CASCADE;
+
+
+-- Completed on 2026-03-16 19:11:05 CET
+
+--
+-- PostgreSQL database dump complete
+--
+
+\unrestrict 9rrjUfMYHkxELyi9VqL0qKC66WevEzbOy67QoXurmlEgdTppk9N84WvqAU06XFf
+
